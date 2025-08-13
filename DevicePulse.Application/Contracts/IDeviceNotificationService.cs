@@ -8,8 +8,8 @@ namespace DevicePulse.Application.Contracts
 {
     public interface IDeviceNotificationService
     {
+      
         Task SendFallAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
-        Task SendInactivityAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
 
         Task SendBatteryDropAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
 
