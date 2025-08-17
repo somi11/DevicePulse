@@ -11,6 +11,8 @@ namespace DevicePulse.Application.Contracts
     {
         Task<Device?> GetByDeviceIdAsync(Guid id);
         Task SaveAsync(Device device);
-
+        Task<IEnumerable<Device>> GetAllAsync();
+        Task<IEnumerable<TelemetryReading>> GetTelemetryByDeviceIdAsync(Guid deviceId, CancellationToken cancellationToken);
+        Task<IEnumerable<DeviceEvent>> GetEventsByDeviceIdAsync(Guid deviceId, CancellationToken cancellationToken);
     }
 }

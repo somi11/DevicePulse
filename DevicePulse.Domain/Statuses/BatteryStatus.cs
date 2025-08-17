@@ -11,7 +11,7 @@ namespace DevicePulse.Domain.Statuses
     public class BatteryStatus
     {
         public double Level { get; private set; }
-        private double _previousLevel;
+        public double _previousLevel;
 
         public void Update(BatteryData data)
         {
@@ -22,8 +22,19 @@ namespace DevicePulse.Domain.Statuses
 
         public bool HasDroppedByAtLeastOnePercent()
         {
+
+            if (_previousLevel <= 0) return false;
+
             return (_previousLevel - Level) >= 1.0;
         }
+
+        public bool IsCharging()
+        {
+            
+            if (_previousLevel <= 0) return false;
+            return Level > _previousLevel;
+        }
+
     }
 
 }

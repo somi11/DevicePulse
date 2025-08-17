@@ -43,8 +43,7 @@ namespace DevicePulse.Application.Features.Devices.Queries.GetDeviceByIdQuery
                 Name = device.Name,
                 Acceleration = lastReading?.Acceleration,
                 Battery = lastReading?.Battery,
-                Gps = lastReading?.Gps,
-                Network = lastReading?.Network,
+                Gps = lastReading?.Gps,            
                 LastUpdated = lastReading?.Timestamp ?? DateTime.MinValue
             };
         }

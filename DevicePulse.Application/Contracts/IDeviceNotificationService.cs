@@ -16,5 +16,6 @@ namespace DevicePulse.Application.Contracts
         Task SendOfflineAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
 
         Task SendMovementAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
+        Task SendBatteryChargeAlertAsync(Guid deviceId, CancellationToken cancellationToken = default);
     }
 }

@@ -1,9 +1,12 @@
 ﻿using DevicePulse.Application.Contracts;
+using DevicePulse.Application.Features.Devices.Events.Device.BatteryChargingEvent;
 using DevicePulse.Application.Features.Devices.Events.Device.BatteryDropEvent;
 using DevicePulse.Application.Features.Devices.Events.Device.DeviceMovedEvent;
 using DevicePulse.Application.Features.Devices.Events.Device.DeviceOfflineEvent;
 using DevicePulse.Application.Features.Devices.Events.Device.FallDetectedEvent;
+using DevicePulse.Application.models;
 using DevicePulse.Domain.Entities;
+using DevicePulse.Domain.Events;
 using MediatR;
 using Microsoft.Extensions.Logging;
 using System;
@@ -19,16 +22,20 @@ namespace DevicePulse.Application.Features.Devices.Commands.ProcessTelemetry
         private readonly IMediator _mediator;
         private readonly ILogger<ProcessTelemetryCommandHandler> _logger;
         private readonly IDeviceRepository _deviceRepository;
+        private readonly IClientNotificationService _clientNotificationService;
 
 
         public  ProcessTelemetryCommandHandler(IMediator mediator , 
                 ILogger<ProcessTelemetryCommandHandler> logger, 
-                IDeviceRepository deviceRepository)
+                IDeviceRepository deviceRepository,
+                IClientNotificationService clientNotificationService
+                )
         {
 
             _mediator = mediator;
             _logger = logger;
             _deviceRepository = deviceRepository;
+            _clientNotificationService = clientNotificationService;
         }
         public async Task<Unit> Handle(ProcessTelemetryCommand request, CancellationToken cancellationToken)
         {
@@ -36,8 +43,7 @@ namespace DevicePulse.Application.Features.Devices.Commands.ProcessTelemetry
 
             //getting device or creating it 
             var device = await _deviceRepository.GetByDeviceIdAsync(request.DeviceId)
-                     ?? new Device { DeviceId = request.DeviceId, Name = request.DeviceName ?? "New Device" };
-
+                     ?? new Device { DeviceId = request.DeviceId, Name = request.DeviceName ?? "Mi 11T Pro" };
             if (device != null)
             {
                 var telemetry = new TelemetryReading
@@ -47,46 +53,91 @@ namespace DevicePulse.Application.Features.Devices.Commands.ProcessTelemetry
                     Acceleration = request.Telemetry.Acceleration,
                     Battery = request.Telemetry.Battery,
                     Gps = request.Telemetry.Gps,
-                    Network = request.Telemetry.Network
                 };
+                var events = device.UpdateTelemetry(telemetry);
 
-                device.UpdateFromTelemetry(telemetry);
-                device.AddTelemetryReading(telemetry);
-
-                // Business rules
-                if (device.Acceleration.IsFallDetected())
+                foreach (var domainEvent in events)
                 {
-                    _logger.LogWarning("Fall detected for device {DeviceId}", request.DeviceId);
-                    device.AddEvent(new DeviceEvent("FallDetected", "Device fall detected."));
-                    await _mediator.Publish(new FallDetectedEvent(request.DeviceId), cancellationToken);
+                    switch (domainEvent)
+                    {
+                        case FallDetectedDomainEvent fall:
+                            _logger.LogInformation(
+                                "[ProcessTelemetryCommandHandler] : Device {DeviceId} FALL detected | Old X={OldX} Y={OldY} Z={OldZ} | New X={NewX} Y={NewY} Z={NewZ}",
+                                device.DeviceId,
+                                fall.Old_X, fall.Old_Y, fall.Old_Z,
+                                fall.X, fall.Y, fall.Z
+                            );
+                            var fallEvent = new DeviceEvent("FallDetected", "Device fall detected.");
+                            fallEvent.DeviceId = device.DeviceId;
+                            device.AddEvent(fallEvent);
+                            await _clientNotificationService.NotifyEventAsync(device.DeviceId, fallEvent);
+                            await _mediator.Publish(new FallDetectedEvent(device.DeviceId), cancellationToken);
+                            break;
+
+                        case BatteryDropDomainEvent battery:
+                            _logger.LogInformation(
+                                "[ProcessTelemetryCommandHandler] : Device {DeviceId} Battery drop | Old={OldLevel} New={NewLevel}",
+                                device.DeviceId,
+                                battery._previousLevel,
+                                battery.Level
+                            );
+                            var batteryDropEvent = new DeviceEvent("BatteryDrop", "Battery dropped by ≥ 1%.");
+                             batteryDropEvent.DeviceId = device.DeviceId;
+                            device.AddEvent(batteryDropEvent);
+                            
+                            await _clientNotificationService.NotifyEventAsync(device.DeviceId, batteryDropEvent);
+                            await _mediator.Publish(new BatteryDropEvent(device.DeviceId), cancellationToken);
+                            break;
+
+                        case DeviceMovedDomainEvent gps:
+                            _logger.LogInformation(
+                                "[ProcessTelemetryCommandHandler] : Device {DeviceId} MOVED | OldLat={OldLat} OldLng={OldLng} | NewLat={NewLat} NewLng={NewLng}",
+                                device.DeviceId,
+                                gps.OldLatitude, gps.OldLongitude,
+                                gps.NewLatitude, gps.NewLongitude
+                            );
+                            // Notify about device movement
+                            var deviceMovedEvent = new DeviceEvent("DeviceMoved", "Device moved to a new location.");
+                            deviceMovedEvent.DeviceId = device.DeviceId;
+                            device.AddEvent(deviceMovedEvent);
+                            await _clientNotificationService.NotifyEventAsync(device.DeviceId, deviceMovedEvent);
+                            await _mediator.Publish(new DeviceMovedEvent(device.DeviceId), cancellationToken);
+                            break;
+
+                        case BatteryChargingDomainEvent charge:
+                            _logger.LogInformation("[TelemetryHandler] Device {DeviceId} BATTERY CHARGING | Old: {Old} New: {New}",
+                                device.DeviceId, charge.PreviousLevel, charge.Level);
+                            var batteryChargingEvent = new DeviceEvent("BatteryCharging", "Battery charging detected.");
+                             batteryChargingEvent.DeviceId = device.DeviceId;
+                            device.AddEvent(batteryChargingEvent);
+                            await _clientNotificationService.NotifyEventAsync(device.DeviceId, batteryChargingEvent);
+                            await _mediator.Publish(new BatteryChargingEvent(device.DeviceId), cancellationToken);
+                            break;
+                    }
                 }
 
-                if (device.Battery.HasDroppedByAtLeastOnePercent())
-                {
-                    _logger.LogInformation("[ProcessTelemetryCommandHandler] : Battery dropped by ≥ 1% for device {DeviceId}", request.DeviceId);
-                    device.AddEvent(new DeviceEvent("[ProcessTelemetryCommandHandler] : BatteryDrop", "Battery dropped by ≥ 1%."));
-                    await _mediator.Publish(new BatteryDropEvent(request.DeviceId), cancellationToken);
-                }
-
-                if (!device.Network.IsOnline)
-                {
-                    _logger.LogWarning("[ProcessTelemetryCommandHandler]: Device {DeviceId} is offline", request.DeviceId);
-                    device.AddEvent(new DeviceEvent("[ProcessTelemetryCommandHandler] : DeviceOffline", "Device appears offline."));
-                    await _mediator.Publish(new DeviceOfflineEvent(request.DeviceId), cancellationToken);
-                }
-
-                if (device.Gps.PositionChanged())
-                {
-                    _logger.LogInformation("[ProcessTelemetryCommandHandler] :Device {DeviceId} moved to a new position", request.DeviceId);
-                    device.AddEvent(new DeviceEvent("[ProcessTelemetryCommandHandler] : DeviceMoved", "Device changed location."));
-                    await _mediator.Publish(new DeviceMovedEvent(request.DeviceId), cancellationToken);
-                }
- 
                 // Save updated device state
                 await _deviceRepository.SaveAsync(device);
+                // Push live telemetry to SignalR
+                await _clientNotificationService.NotifyTelemetryAsync(device.DeviceId, telemetry);
 
-                _logger.LogInformation("[ProcessTelemetryCommandHandler] : Telemetry processed for device {DeviceId}", request.DeviceId);
+                //Push device status to SignalR
+                var deviceStatus = new DeviceStatus
+                {
+                    DeviceId = device.DeviceId,
+                    DeviceName = device.Name,
+                    LastSeen = DateTime.UtcNow,
+                    Status = telemetry.Battery.Level > 20 ? "Healthy" : "Battery low",
+                    BatteryLevel = telemetry.Battery.Level,
+                    Location = telemetry.Gps.Longitude.ToString(),
+                    IsCharging = telemetry.Battery.Level > 90, 
+                    IsMoving = device.Gps.PositionChanged(), 
+                    FallDetected = device.Acceleration.IsFallDetected() 
+                };
 
+                await _clientNotificationService.NotifyDeviceStatusAsync(device.DeviceId ,deviceStatus);
+
+                
                 return Unit.Value;
             }
             _logger.LogInformation("[ProcessTelemetryCommandHandler] : Telemetry can;t processed for device {DeviceId}", request.DeviceId);
